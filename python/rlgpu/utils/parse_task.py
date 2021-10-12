@@ -12,6 +12,7 @@ from rlgpu.tasks.quadcopter import Quadcopter
 from rlgpu.tasks.ant import Ant
 from rlgpu.tasks.humanoid import Humanoid
 from rlgpu.tasks.franka import FrankaCabinet
+from rlgpu.tasks.kinova import KinovaCabinet
 from rlgpu.tasks.shadow_hand import ShadowHand
 from rlgpu.tasks.ingenuity import Ingenuity
 from rlgpu.tasks.anymal import Anymal
@@ -73,5 +74,5 @@ def parse_task(args, cfg, cfg_train, sim_params):
             print(e)
             warn_task_name()
         env = VecTaskPython(task, rl_device)
-
+    
     return task, env

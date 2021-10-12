@@ -8,7 +8,7 @@ env:
   startPositionNoise: 0.0
   startRotationNoise: 0.0
 
-  numProps: 16
+  numProps: 0
   aggregateMode: 3
 
   actionScale: 7.5
@@ -22,7 +22,7 @@ env:
 
   asset:
     assetRoot: "../../assets"
-    assetFileNameFranka: "urdf/franka_description/robots/franka_panda.urdf"
+    assetFileNameFranka: "urdf/kinova_gen3/urdf/GEN3_URDF_V12.urdf"
     assetFileNameCabinet: "urdf/sektion_cabinet_model/urdf/sektion_cabinet_2.urdf"
 
 sim:

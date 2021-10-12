@@ -294,19 +294,20 @@ class FrankaCabinet(BaseTask):
         lfinger_pose = self.gym.get_rigid_transform(self.envs[0], lfinger)
         rfinger_pose = self.gym.get_rigid_transform(self.envs[0], rfinger)
 
-        finger_pose = gymapi.Transform()
+        finger_pose = gymapi.Transform() 
         finger_pose.p = (lfinger_pose.p + rfinger_pose.p) * 0.5
         finger_pose.r = lfinger_pose.r
 
         hand_pose_inv = hand_pose.inverse()
         grasp_pose_axis = 1
         franka_local_grasp_pose = hand_pose_inv * finger_pose
+        print(franka_local_grasp_pose.p)
+
         franka_local_grasp_pose.p += gymapi.Vec3(*get_axis_params(0.04, grasp_pose_axis))
         self.franka_local_grasp_pos = to_torch([franka_local_grasp_pose.p.x, franka_local_grasp_pose.p.y,
                                                 franka_local_grasp_pose.p.z], device=self.device).repeat((self.num_envs, 1))
         self.franka_local_grasp_rot = to_torch([franka_local_grasp_pose.r.x, franka_local_grasp_pose.r.y,
                                                 franka_local_grasp_pose.r.z, franka_local_grasp_pose.r.w], device=self.device).repeat((self.num_envs, 1))
-
         drawer_local_grasp_pose = gymapi.Transform()
         drawer_local_grasp_pose.p = gymapi.Vec3(*get_axis_params(0.01, grasp_pose_axis, 0.3))
         drawer_local_grasp_pose.r = gymapi.Quat(0, 0, 0, 1)
@@ -356,7 +357,6 @@ class FrankaCabinet(BaseTask):
             compute_grasp_transforms(hand_rot, hand_pos, self.franka_local_grasp_rot, self.franka_local_grasp_pos,
                                      drawer_rot, drawer_pos, self.drawer_local_grasp_rot, self.drawer_local_grasp_pos
                                      )
-
         self.franka_lfinger_pos = self.rigid_body_states[:, self.lfinger_handle][:, 0:3]
         self.franka_rfinger_pos = self.rigid_body_states[:, self.rfinger_handle][:, 0:3]
         self.franka_lfinger_rot = self.rigid_body_states[:, self.lfinger_handle][:, 3:7]
@@ -365,9 +365,9 @@ class FrankaCabinet(BaseTask):
         dof_pos_scaled = (2.0 * (self.franka_dof_pos - self.franka_dof_lower_limits)
                           / (self.franka_dof_upper_limits - self.franka_dof_lower_limits) - 1.0)
         to_target = self.drawer_grasp_pos - self.franka_grasp_pos
+
         self.obs_buf = torch.cat((dof_pos_scaled, self.franka_dof_vel * self.dof_vel_scale, to_target,
                                   self.cabinet_dof_pos[:, 3].unsqueeze(-1), self.cabinet_dof_vel[:, 3].unsqueeze(-1)), dim=-1)
-
         return self.obs_buf
 
     def reset(self, env_ids):
