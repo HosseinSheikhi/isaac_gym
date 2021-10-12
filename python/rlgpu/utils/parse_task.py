@@ -13,6 +13,7 @@ from rlgpu.tasks.ant import Ant
 from rlgpu.tasks.humanoid import Humanoid
 from rlgpu.tasks.franka import FrankaCabinet
 from rlgpu.tasks.kinova import KinovaCabinet
+from rlgpu.tasks.kinova_camera import KinovaCamera
 from rlgpu.tasks.shadow_hand import ShadowHand
 from rlgpu.tasks.ingenuity import Ingenuity
 from rlgpu.tasks.anymal import Anymal

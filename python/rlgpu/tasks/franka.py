@@ -301,7 +301,6 @@ class FrankaCabinet(BaseTask):
         hand_pose_inv = hand_pose.inverse()
         grasp_pose_axis = 1
         franka_local_grasp_pose = hand_pose_inv * finger_pose
-        print(franka_local_grasp_pose.p)
 
         franka_local_grasp_pose.p += gymapi.Vec3(*get_axis_params(0.04, grasp_pose_axis))
         self.franka_local_grasp_pos = to_torch([franka_local_grasp_pose.p.x, franka_local_grasp_pose.p.y,
