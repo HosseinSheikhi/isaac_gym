@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import torch
+import math
 import imageio
 
 from rlgpu.utils.torch_jit_utils import *
@@ -66,7 +67,7 @@ class KinovaCamera(BaseTask):
         self.gym.refresh_rigid_body_state_tensor(self.sim)
 
         # create some wrapper tensors for different slices
-        self.kinova_default_dof_pos = to_torch([1.0, 1.0, -1.0, 2.0, -2.0, 0.0, 1.0], device=self.device) #todo
+        self.kinova_default_dof_pos = to_torch([0.0, -1.0, 0.0, +2.6, -1.57, 0.0, 0], device=self.device) #todo
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
         self.kinova_dof_state = self.dof_state.view(self.num_envs, -1, 2)[: , :self.num_kinova_dofs]
         self.kinova_dof_pos = self.kinova_dof_state[..., 0]
@@ -220,7 +221,7 @@ class KinovaCamera(BaseTask):
             # add sensor
             sensor_handle = self.gym.create_camera_sensor(env_ptr, cam_props)
             camera_offset = gymapi.Vec3(0, -0.1, -0.1)
-            camera_rotation = gymapi.Quat.from_euler_zyx(0.78,1.57,0) #gymapi.Quat(0.0, 0.0, 1.0, 0.0) 
+            camera_rotation = gymapi.Quat.from_euler_zyx(math.pi/2.0,math.pi/2.0,0) 
             kinova_bracklet_handle = self.gym.find_actor_rigid_body_handle(env_ptr, kinova_actor, "Bracelet_Link")
             self.gym.attach_camera_to_body(sensor_handle, env_ptr, kinova_bracklet_handle, gymapi.Transform(camera_offset, camera_rotation), gymapi.FOLLOW_TRANSFORM)
             self.sensors.append(sensor_handle)
@@ -379,8 +380,8 @@ class KinovaCamera(BaseTask):
         self.kinova_dof_targets[:, :self.num_kinova_dofs] = tensor_clamp(
             targets, self.kinova_dof_lower_limits, self.kinova_dof_upper_limits)
         env_ids_int32 = torch.arange(self.num_envs, dtype=torch.int32, device=self.device)
-        # self.gym.set_dof_position_target_tensor(self.sim,
-        #                                         gymtorch.unwrap_tensor(self.kinova_dof_targets))
+        self.gym.set_dof_position_target_tensor(self.sim,
+                                                 gymtorch.unwrap_tensor(self.kinova_dof_targets))
 
     def post_physics_step(self):
         self.progress_buf += 1
