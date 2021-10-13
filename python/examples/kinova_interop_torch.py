@@ -187,8 +187,8 @@ for i in range(num_envs):
     # wrap sensor tensor in a pytorch tensor
     torch_sensor_tensor = gymtorch.wrap_tensor(sensor_tensor)
     sensors_tensors.append(torch_sensor_tensor)
-    print("  Torch sensor tensor device:", torch_cam_tensor.device)
-    print("  Torch sensor tensor shape:", torch_cam_tensor.shape)
+    print("  Torch sensor tensor device:", torch_sensor_tensor.device)
+    print("  Torch sensor tensor shape:", torch_sensor_tensor.shape)
 
 
 
