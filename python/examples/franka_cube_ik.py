@@ -34,6 +34,7 @@ def quat_axis(q, axis=0):
 def orientation_error(desired, current):
     cc = quat_conjugate(current)
     q_r = quat_mul(desired, cc)
+    print("q_r:", q_r)
     return q_r[:, 0:3] * torch.sign(q_r[:, 3]).unsqueeze(-1)
 
 
@@ -328,7 +329,7 @@ while not gym.query_viewer_has_closed(viewer):
     # gripper actions depend on distance between hand and box
     close_gripper = (box_dist < grasp_offset + 0.02) | gripped
     # always open the gripper above a certain height, dropping the box and restarting from the beginning
-    hand_restart = hand_restart | (box_pos[:, 2] > 0.7)
+    hand_restart = hand_restart | (box_pos[:, 2] > 0.6)
     keep_going = torch.logical_not(hand_restart)
     close_gripper = close_gripper & keep_going.unsqueeze(-1)
     grip_acts = torch.where(close_gripper, torch.Tensor([[0., 0.]] * num_envs).to(device), torch.Tensor([[0.04, 0.04]] * num_envs).to(device))

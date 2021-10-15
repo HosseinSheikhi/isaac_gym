@@ -340,7 +340,6 @@ class FrankaCabinet(BaseTask):
             self.num_envs, self.dist_reward_scale, self.rot_reward_scale, self.around_handle_reward_scale, self.open_reward_scale,
             self.finger_dist_reward_scale, self.action_penalty_scale, self.distX_offset, self.max_episode_length
         )
-
     def compute_observations(self):
 
         self.gym.refresh_actor_root_state_tensor(self.sim)

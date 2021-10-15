@@ -312,15 +312,17 @@ while not gym.query_viewer_has_closed(viewer):
         pos_err = goal_pos - hand_pos
         orn_err = orientation_error(goal_rot, hand_rot)
         dpose = torch.cat([pos_err, orn_err], -1).unsqueeze(-1)
+        
         # solve damped least squares
         j_eef_T = torch.transpose(j_eef, 1, 2)
         d = 0.05  # damping term
         lmbda = torch.eye(6).to(device) * (d ** 2)
         u = (j_eef_T @ torch.inverse(j_eef @ j_eef_T + lmbda) @ dpose).view(num_envs, 7, 1)
-        
+        print(dof_pos.shape)
+        print(u.shape)
         # update position targets
         pos_target = dof_pos + u
-        print(pos_target)
+        #print(pos_target)
         # gripper actions depend on distance between hand and box
         #close_gripper = (box_dist < grasp_offset + 0.02) | gripped
         # always open the gripper above a certain height, dropping the box and restarting from the beginning
