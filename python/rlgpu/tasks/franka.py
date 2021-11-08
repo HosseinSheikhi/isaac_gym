@@ -403,6 +403,7 @@ class FrankaCabinet(BaseTask):
         self.reset_buf[env_ids] = 0
 
     def pre_physics_step(self, actions):
+        #print(actions.shape)
         self.actions = actions.clone().to(self.device)
         targets = self.franka_dof_targets[:, :self.num_franka_dofs] + self.franka_dof_speed_scales * self.dt * self.actions * self.action_scale
         self.franka_dof_targets[:, :self.num_franka_dofs] = tensor_clamp(

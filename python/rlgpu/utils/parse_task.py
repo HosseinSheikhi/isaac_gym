@@ -14,7 +14,7 @@ from rlgpu.tasks.humanoid import Humanoid
 from rlgpu.tasks.franka import FrankaCabinet
 from rlgpu.tasks.kinova import KinovaCabinet
 from rlgpu.tasks.kinova_camera import KinovaCamera
-from rlgpu.tasks.kinova_camera_ik import KinovaCameraIK
+from rlgpu.tasks.kinova_camera_ik_env import KinovaCameraIKEnv
 from rlgpu.tasks.shadow_hand import ShadowHand
 from rlgpu.tasks.ingenuity import Ingenuity
 from rlgpu.tasks.anymal import Anymal

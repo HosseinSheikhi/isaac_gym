@@ -5,6 +5,7 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
+from torch._C import device, dtype, int32
 import sys
 import os
 import operator
@@ -50,8 +51,13 @@ class BaseTask():
         torch._C._jit_set_profiling_executor(False)
 
         # allocate buffers
-        self.obs_buf = torch.zeros(
-            (self.num_envs, self.num_obs), device=self.device, dtype=torch.float)
+        if isinstance(self.num_obs, int):
+            self.obs_buf = torch.zeros(
+                (self.num_envs, self.num_obs), device=self.device, dtype=torch.float)
+        else:
+            self.obs_buf = torch.zeros(
+                (self.num_envs, *self.num_obs), device=self.device, dtype=torch.float)
+
         self.states_buf = torch.zeros(
             (self.num_envs, self.num_states), device=self.device, dtype=torch.float)
         self.rew_buf = torch.zeros(
@@ -62,6 +68,7 @@ class BaseTask():
             self.num_envs, device=self.device, dtype=torch.long)
         self.randomize_buf = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.long)
+        self.valid = torch.zeros(self.num_envs, device=self.device, dtype=int32)
         self.extras = {}
 
         self.original_props = {}

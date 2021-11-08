@@ -4,18 +4,18 @@
     <visual>
       <origin xyz="0 0 0"/>
       <geometry>
-        <box size="0.05 0.05 0.05"/>
+        <box size="0.5 0.5 0.5"/>
       </geometry>
     </visual>
     <collision>
       <origin xyz="0 0 0"/>
       <geometry>
-        <box size="0.05 0.05 0.05"/>
+        <box size="0.5 0.5 0.5"/>
       </geometry>
     </collision>
      <inertial>
-      <mass value="0.5"/>
-      <inertia ixx="0.05" ixy="0.0" ixz="0.0" iyy="0.05" iyz="0.0" izz="0.05"/>
+      <mass value="1.5"/>
+      <inertia ixx="0.5" ixy="0.0" ixz="0.0" iyy="0.5" iyz="0.0" izz="0.5"/>
     </inertial>
   </link>
 </robot>
