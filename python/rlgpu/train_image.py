@@ -17,7 +17,7 @@ import torch
 def train():
     task, env = parse_task(args, cfg, cfg_train, sim_params)
     for i in range( 1000):
-        obs, _, _, _ = env.step(torch.rand(8,6)) # todo notice actions will be clipped
+        obs, _, _, _, _ = env.step(torch.rand(8,6)) # todo notice actions will be clipped
         #print(obs.shape)
 
     

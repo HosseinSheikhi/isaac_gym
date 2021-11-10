@@ -5,7 +5,7 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-from torch._C import device, dtype, int32
+from torch._C import device, dtype
 import sys
 import os
 import operator
@@ -68,7 +68,7 @@ class BaseTask():
             self.num_envs, device=self.device, dtype=torch.long)
         self.randomize_buf = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.long)
-        self.valid = torch.zeros(self.num_envs, device=self.device, dtype=int32)
+        self.valid = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.extras = {}
 
         self.original_props = {}
