@@ -107,7 +107,7 @@ class KinovaCamera(BaseTask):
         lower = gymapi.Vec3(-spacing, -spacing, 0.0)
         upper = gymapi.Vec3(spacing, spacing, spacing)
 
-        asset_root = "../../assets"
+        asset_root = "/home/mh/isaacgym/assets"
         kinova_asset_file = "urdf/kinova_gen3/urdf/GEN3_URDF_V12.urdf"
         cabinet_asset_file = "urdf/sektion_cabinet_model/urdf/sektion_cabinet_2.urdf"
 

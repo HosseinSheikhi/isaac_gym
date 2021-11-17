@@ -72,7 +72,7 @@ def retrieve_cfg(args, use_rlg_config=False):
         elif args.task == "KinovaCabinet":
             return os.path.join(args.logdir, "kinova_cabinet"), "cfg/train/rlg/rlg_kinova_cabinet.yaml", "cfg/kinova_cabinet.yaml"
         elif args.task == "KinovaCamera":
-            return os.path.join(args.logdir, "kinova_camera"), "cfg/train/rlg/rlg_kinova_camera.yaml", "cfg/kinova_camera.yaml"
+            return os.path.join(args.logdir, "kinova_camera"), "rlgpu/cfg/train/rlg/rlg_kinova_camera.yaml", "rlgpu/cfg/kinova_camera.yaml"
         elif args.task == "KinovaCameraIKEnv":
             return os.path.join(args.logdir, "kinova_camera_ik_env"), "rlgpu/cfg/train/rlg/rlg_kinova_camera_ik_env.yaml", "rlgpu/cfg/kinova_camera_ik_env.yaml"
         elif args.task == "Quadcopter":
@@ -120,7 +120,7 @@ def retrieve_cfg(args, use_rlg_config=False):
         elif args.task == "KinovaCabinet":
             return os.path.join(args.logdir, "kinova_cabinet"), "cfg/train/rlpt/pytorch_ppo_kinova_cabinet.yaml", "cfg/kinova_cabinet.yaml"
         elif args.task == "KinovaCamera":
-            return os.path.join(args.logdir, "kinova_camera"), "cfg/train/rlpt/pytorch_ppo_kinova_camera.yaml", "cfg/kinova_camera.yaml"
+            return os.path.join(args.logdir, "kinova_camera"), "rlgpu/cfg/train/rlpt/pytorch_ppo_kinova_camera.yaml", "rlgpu/cfg/kinova_camera.yaml"
         elif args.task == "KinovaCameraIKEnv":
             return os.path.join(args.logdir, "kinova_camera_ik_env"), "rlgpu/cfg/train/rlpt/pytorch_ppo_kinova_camera_ik_env.yaml", "rlgpu/cfg/kinova_camera_ik_env.yaml"
         elif args.task == "Quadcopter":

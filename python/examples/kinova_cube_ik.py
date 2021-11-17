@@ -85,7 +85,7 @@ viewer = gym.create_viewer(sim, gymapi.CameraProperties())
 if viewer is None:
     raise Exception("Failed to create viewer")
 
-asset_root = "../../assets"
+asset_root = "/home/mh/isaacgym/assets"
 
 # create table asset
 table_dims = gymapi.Vec3(0.6, 1.0, 0.4)
