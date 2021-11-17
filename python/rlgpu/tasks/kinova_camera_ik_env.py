@@ -133,9 +133,10 @@ class KinovaCameraIKEnv(BaseTask):
         # whenever you wana move kinova to a target you have to fill in this tensor and call set_dof_position_target
         self.kinova_target_dof_pos = torch.zeros((self.num_envs, self.num_kinova_dofs), dtype=torch.float, device=self.device)
         
-        # 2 if manip is moved to a random conf, the goal image is taken, and the returned to home pose and home image is taken
-        # 1 if moved to goal but not homed
-        # 0 if neither moved to goal nor homed
+        # 3 if manip is moved to a random conf, the goal image is taken, and the returned to home pose and home image is taken
+        # 2 if moved to goal but not homed
+        # 1 if rnd object is respawned
+        # 0 if neither moved to goal nor homed nor rnd object is respawned
         self.reset_complete = torch.zeros(self.num_envs, dtype=torch.int32, device=self.device) 
         self.goal_obs = torch.zeros((self.num_envs,1, self.camera_width, self.camera_height,4 ), device=self.device, dtype=torch.float)
         self.current_obs = torch.zeros((self.num_envs, 1, self.camera_width, self.camera_height,4 ), device=self.device, dtype=torch.float)
@@ -324,11 +325,11 @@ class KinovaCameraIKEnv(BaseTask):
         self.gym.render_all_camera_sensors(self.sim)
         self.gym.start_access_image_tensors(self.sim)
 
-        reset_complete_1 = (self.reset_complete==1).nonzero(as_tuple=False).squeeze(-1)
-        reset_complete_2 = (self.reset_complete==2).nonzero(as_tuple=False).squeeze(-1)
-        for i in reset_complete_1:
-            self.goal_obs[i] = self.cam_tensors[i] # self.reset_complete==1 means already is reached to target but not hommed yet
+        reset_complete_2 = (self.reset_complete==2).nonzero(as_tuple=False).squeeze(-1) # already reached target
+        reset_complete_3 = (self.reset_complete==3).nonzero(as_tuple=False).squeeze(-1)
         for i in reset_complete_2:
+            self.goal_obs[i] = self.cam_tensors[i] # self.reset_complete==1 means already is reached to target but not hommed yet
+        for i in reset_complete_3:
             self.current_obs[i] = self.cam_tensors[i]
         
         torch.cat((self.goal_obs, self.current_obs), 1 , out=self.obs_buf)
@@ -388,24 +389,7 @@ class KinovaCameraIKEnv(BaseTask):
         kinova_indices = self.kinova_indices[env_ids].to(torch.int32)
 
         if(len(kinova_indices)>0):            
-            # re-spawn random objects
-            self.rand_obj_dof_state[env_ids, :] = torch.zeros_like(self.rand_obj_dof_state[env_ids])
-            rand_poses = []
-            for _ in range(self.num_envs):
-                pose = gymapi.Transform()
-                pose.p = gymapi.Vec3(np.random.rand()-2, np.random.rand()-0.5, 0.5)
-                u = np.random.rand()
-                v = np.random.rand()
-                w = np.random.rand()
-                pose.r = gymapi.Quat(math.sqrt(1-u)*math.sin(2*math.pi*v), math.sqrt(1-u)*math.cos(2*math.pi*v), math.sqrt(u)*math.sin(2*math.pi*w), math.sqrt(u)*math.cos(2*math.pi*w))
-                rand_poses.append([pose.p.x, pose.p.y, pose.p.z, pose.r.x, pose.r.y, pose.r.z, pose.r.w, 0.0, 0.0, 0.0 ,0.0 , 0.0 , 0.0 ])
-            rand_poses_tensor= to_torch(rand_poses, device=self.device, dtype=torch.float).view(self.num_envs, 1, 13) # assuming just one random obj in each
-            rand_obj_indices = kinova_indices + 1 # assuming each env has 1 kinova and 1 rand object
-            self.rand_obj_states[env_ids] = rand_poses_tensor[:]
-            self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                         gymtorch.unwrap_tensor(self.root_state_tensor),
-                                                         gymtorch.unwrap_tensor(rand_obj_indices), len(rand_obj_indices))
-
+           
             # set target for Kinova
             pos = tensor_clamp(
                 self.kinova_home.unsqueeze(0) + 0.50 * (torch.rand((len(env_ids), self.num_kinova_dofs), device=self.device) - 0.25),
@@ -425,7 +409,26 @@ class KinovaCameraIKEnv(BaseTask):
                                                 gymtorch.unwrap_tensor(self.dof_state),
                                                 gymtorch.unwrap_tensor(kinova_indices), len(kinova_indices))
 
-    
+    def respawn_rand_obj(self, env_ids):
+        rand_obj_indices = self.kinova_indices[env_ids].to(torch.int32) + 1 # assuming each env has 1 kinova and 1 rand object
+        if(len(rand_obj_indices)>0):
+         # re-spawn random objects
+            self.rand_obj_dof_state[env_ids, :] = torch.zeros_like(self.rand_obj_dof_state[env_ids])
+            rand_poses = []
+            for _ in range(self.num_envs):
+                pose = gymapi.Transform()
+                pose.p = gymapi.Vec3(np.random.rand()-2, np.random.rand()-0.5, 0.5)
+                u = np.random.rand()
+                v = np.random.rand()
+                w = np.random.rand()
+                pose.r = gymapi.Quat(math.sqrt(1-u)*math.sin(2*math.pi*v), math.sqrt(1-u)*math.cos(2*math.pi*v), math.sqrt(u)*math.sin(2*math.pi*w), math.sqrt(u)*math.cos(2*math.pi*w))
+                rand_poses.append([pose.p.x, pose.p.y, pose.p.z, pose.r.x, pose.r.y, pose.r.z, pose.r.w, 0.0, 0.0, 0.0 ,0.0 , 0.0 , 0.0 ])
+            rand_poses_tensor= to_torch(rand_poses, device=self.device, dtype=torch.float).view(self.num_envs, 1, 13) # assuming just one random obj in each
+            self.rand_obj_states[env_ids] = rand_poses_tensor[:]
+            self.gym.set_actor_root_state_tensor_indexed(self.sim,
+                                                         gymtorch.unwrap_tensor(self.root_state_tensor),
+                                                         gymtorch.unwrap_tensor(rand_obj_indices), len(rand_obj_indices))
+
     def reset(self, env_ids):
         """
             reset kinova:
@@ -437,9 +440,9 @@ class KinovaCameraIKEnv(BaseTask):
         Args:
             env_ids ([list]): [index of envs that their kinova need to be reset]
         """
-        
-        self.reach_target((self.reset_complete==0).nonzero(as_tuple=False).squeeze(-1))
-        self.reach_home((self.reset_complete==1).nonzero(as_tuple=False).squeeze(-1))
+        self.respawn_rand_obj((self.reset_complete==0).nonzero(as_tuple=False).squeeze(-1))
+        self.reach_target((self.reset_complete==1).nonzero(as_tuple=False).squeeze(-1))
+        self.reach_home((self.reset_complete==2).nonzero(as_tuple=False).squeeze(-1))
        
         self.progress_buf[env_ids] = 0
         self.reset_buf[env_ids] = 0
@@ -453,7 +456,7 @@ class KinovaCameraIKEnv(BaseTask):
         Args:
             actions ([tensor]): [actions to be done]
         """
-        kinova_indices = self.kinova_indices[(self.valid==1).nonzero(as_tuple=False).squeeze(-1)].to(torch.int32)
+        kinova_indices = self.kinova_indices[(self.valid==1).nonzero(as_tuple=False).squeeze(-1)].to(torch.int32) # action will just be execute for those that are valid (are not in reset scenario)
         if(len(kinova_indices)>0):
             pos_err = desired[:, :3] - self.end_effector_pos
             orn_err = orientation_error( desired[:, 3:] , self.end_effector_rot)
@@ -485,15 +488,16 @@ class KinovaCameraIKEnv(BaseTask):
         self.reset_buf[(self.progress_buf==self.max_episode_length-1).nonzero(as_tuple=False).squeeze(-1)]=1
         env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
 
-        if len(env_ids) > 0 or len((self.reset_complete==1).nonzero(as_tuple=False).squeeze(-1)) > 0: # some already running scenarios need reset OR we already called the reached target but not homed the robot yet
+        if len(env_ids) > 0 or len((self.reset_complete!=3).nonzero(as_tuple=False).squeeze(-1)) > 0: # some already running scenarios need reset OR we already in the reset scenario
             self.reset_complete[env_ids] = 0 # 0 means neither moved to goal nor homed
             self.reset(env_ids)
 
-        self.valid[(self.reset_complete==2).nonzero(as_tuple=False).squeeze(-1)]=1
-        self.valid[(self.reset_complete!=2).nonzero(as_tuple=False).squeeze(-1)]=0
+        self.valid[(self.reset_complete==3).nonzero(as_tuple=False).squeeze(-1)]=1
+        self.valid[(self.reset_complete!=3).nonzero(as_tuple=False).squeeze(-1)]=0
         self.compute_observations()
         self.compute_reward()
 
+        self.reset_complete[(self.reset_complete==2).nonzero(as_tuple=False).squeeze(-1)] = 3
         self.reset_complete[(self.reset_complete==1).nonzero(as_tuple=False).squeeze(-1)] = 2
         self.reset_complete[(self.reset_complete==0).nonzero(as_tuple=False).squeeze(-1)] = 1 
 
