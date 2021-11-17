@@ -4,6 +4,8 @@ import os
 import torch
 import math
 
+from skimage import metrics
+
 from torch._C import device, dtype
 import imageio
 
@@ -44,6 +46,7 @@ class KinovaCameraIKEnv(BaseTask):
         super().__init__(cfg=self.cfg, enable_camera_sensors=enable_camera_sensors)
 
         self.set_tensors()
+        self.respawn_rand_obj(torch.arange(self.num_envs, device=self.device))
         self.reach_target(torch.arange(self.num_envs, device=self.device))        
     
     def parse_config(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
@@ -62,14 +65,13 @@ class KinovaCameraIKEnv(BaseTask):
         self.physics_engine = physics_engine
         self.max_episode_length = self.cfg["env"]["episodeLength"]
         self.action_scale = self.cfg["env"]["actionScale"]
-        self.dist_reward_scale = self.cfg["env"]["distRewardScale"]
-        self.rot_reward_scale = self.cfg["env"]["rotRewardScale"]
+        self.similarity_thr = self.cfg["env"]["similarityThreshold"]
         self.action_penalty_scale = self.cfg["env"]["actionPenaltyScale"]
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
         
         self.camera_width = self.cfg["env"]["camera"]["width"]
         self.camera_height = self.cfg["env"]["camera"]["height"]
-
+        
         self.up_axis = "z"
         self.up_axis_idx = 2
         self.dt = 1/60.
@@ -84,6 +86,7 @@ class KinovaCameraIKEnv(BaseTask):
         self.asset_root = self.cfg["env"]["asset"].get("assetRoot")
         self.kinova_asset_file = self.cfg["env"]["asset"].get("assetFileNameKinova")
 
+        
     def set_tensors(self):
         """creates, intilized and slice some usefull tensors
         """
@@ -303,13 +306,16 @@ class KinovaCameraIKEnv(BaseTask):
         self.endefector_handle = self.gym.find_actor_rigid_body_handle(env_ptr, kinova_actor,  "EndEffector_Link") 
 
     def compute_reward(self):
-        pass 
-        # self.rew_buf[:], self.reset_buf[:] = compute_kinova_reward(
-        #     self.reset_buf, self.progress_buf, self.actions,
-        #     self.end_effector_pos, self.end_effector_rot, self.goal,
-        #     self.num_envs, self.dist_reward_scale, self.rot_reward_scale,
-        #     self.action_penalty_scale, self.max_episode_length
-        # )
+    
+        similarities = []
+        for i in range(self.num_envs):
+            similarity = metrics.structural_similarity(self.obs_buf[i][1].cpu().numpy(), self.obs_buf[i][0].cpu().numpy(), multichannel=True)
+            similarities.append(similarity)
+
+        similarities_tensor = to_torch(similarities, device=self.device, dtype=torch.float)
+        self.rew_buf = torch.where(similarities_tensor>=self.similarity_thr, torch.ones_like(self.rew_buf), torch.zeros_like(self.rew_buf) )
+        self.reset_buf = torch.where(self.progress_buf >= self.max_episode_length - 1, torch.ones_like(self.reset_buf), self.reset_buf)
+        
 
     def compute_observations(self):
         """sets the obs_buff based on goal and current observations

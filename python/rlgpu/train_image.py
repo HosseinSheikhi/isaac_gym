@@ -41,7 +41,7 @@ def train():
                          [-0.1086,  0.0167,  0.4626 , 0.4696, -0.5536, -0.3459,  0.5944],
                          [-0.1086,  0.0167,  0.4626 , 0.4696, -0.5536, -0.3459,  0.5944]] ,device=env.rl_device) 
     for i in range( 10000):
-        obs, _, _, _, _ = env.step(home) # todo notice actions will be clipped
+         obs, rew, reset, valid, _ = env.step(home) # todo notice actions will be clipped
         #print(obs.shape)
 
     
