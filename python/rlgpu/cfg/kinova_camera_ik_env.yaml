@@ -8,12 +8,8 @@ env:
   startPositionNoise: 0.0
   startRotationNoise: 0.0
 
-  actionScale: 7.5
-  dofVelocityScale: 0.1
-  distRewardScale: 1.5
-  rotRewardScale: 1.0
-  actionPenaltyScale: 0.05
   similarityThreshold: 0.8
+  targetSpace: 0.25 # if 0.25 means the target joints will be at: home joints (rad) + 0.25*2*rand()-0.25 (rad). it will be set to a low value at the beginning and gradually goes high for the sake of curriculum learning
   asset:
     assetRoot: "/home/mh/isaacgym/assets"
     assetFileNameKinova: "urdf/kinova_gen3/urdf/GEN3_URDF_V12.urdf"

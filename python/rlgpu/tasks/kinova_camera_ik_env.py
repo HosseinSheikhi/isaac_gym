@@ -1,3 +1,31 @@
+# Copyright (c) 2018-2021, NVIDIA Corporation
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+#    contributors may be used to endorse or promote products derived from
+#    this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 from builtins import print
 import numpy as np
 import os
@@ -5,17 +33,22 @@ import torch
 import math
 
 from skimage import metrics
-
-from torch._C import device, dtype
 import imageio
 
-from rlgpu.utils.torch_jit_utils import *
 from rlgpu.tasks.base.base_task import BaseTask
-from isaacgym import gymtorch
-from isaacgym import gymapi
+from isaacgym import gymtorch, gymapi
 from isaacgym.torch_utils import *
 
 def orientation_error(desired, current):
+    """ takes in two quaternion and returns the error between them
+
+    Args:
+        desired (torch.Tensor): [desired quat orientatino]
+        current (torch.Tensor): [current quat orientation]
+
+    Returns:
+        torch.Tensor: [error between two quats]
+    """
     cc = quat_conjugate(current)
     q_r = quat_mul(desired, cc)
     print("q_r:", q_r)
@@ -23,19 +56,28 @@ def orientation_error(desired, current):
 
 class AssetDesc:
     def __init__(self, file_name, asset_name, flip_visual_attachments=False, mesh_normal_mode=gymapi.FROM_ASSET):
+        """Class for random objects description
+
+        Args:
+            file_name (string): [address of asset]
+            asset_name (string): [arbitrary name for asset]
+            flip_visual_attachments (bool, optional): [Switch Meshes from Z-up left-handed system to Y-up Right-handed coordinate system.]. Defaults to False.
+            mesh_normal_mode ([type], optional): [How to load normals for the meshes in the asset.]. Defaults to gymapi.FROM_ASSET.
+        """
         self.file_name = file_name
         self.asset_name = asset_name
         self.flip_visual_attachments = flip_visual_attachments
         self.mesh_normal_mode = mesh_normal_mode
 
-
+# create descriptors for assets as random objects
 asset_descriptors = [
 AssetDesc("urdf/objects/cube_multicolor.urdf","cube", False)
 ]
 
 class KinovaCameraIKEnv(BaseTask):
-    def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless, enable_camera_sensors=False):
-        # todo it is temporary create directory for saved images
+    def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless, enable_camera_sensors=True):
+        # todo it is temporary
+        # create directory for saved images
         self.img_dir = "kinova_camera_images"
         if not os.path.exists(self.img_dir):
             os.mkdir(self.img_dir)
@@ -50,55 +92,43 @@ class KinovaCameraIKEnv(BaseTask):
         self.reach_target(torch.arange(self.num_envs, device=self.device))        
     
     def parse_config(self, cfg, sim_params, physics_engine, device_type, device_id, headless):
-        """ initialize the some cfg parameters based on cfg file
 
-        Args:
-            cfg ([type]): [description]
-            sim_params ([type]): [description]
-            physics_engine ([type]): [description]
-            device_type ([type]): [description]
-            device_id ([type]): [description]
-            headless ([type]): [description]
-        """
         self.cfg = cfg
         self.sim_params = sim_params
         self.physics_engine = physics_engine
         self.max_episode_length = self.cfg["env"]["episodeLength"]
-        self.action_scale = self.cfg["env"]["actionScale"]
         self.similarity_thr = self.cfg["env"]["similarityThreshold"]
-        self.action_penalty_scale = self.cfg["env"]["actionPenaltyScale"]
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
-        
+        self.target_space = self.cfg["env"]["targetSpace"] # if 0.25 means the target joints will be at: home joints (rad) + 0.25*2*rand()-0.25 (rad). it will be set to a low value at the beginning and gradually goes high for the sake of curriculum learning
         self.camera_width = self.cfg["env"]["camera"]["width"]
         self.camera_height = self.cfg["env"]["camera"]["height"]
         
-        self.up_axis = "z"
-        self.up_axis_idx = 2
-        self.dt = 1/60.
-
         self.cfg["env"]["numObservations"] = (2,self.camera_width, self.camera_height,4)
-        self.cfg["env"]["numActions"] = 6 # our action is 3 pose and 3 orientation error (look at the kinova_cube_it orientation error)
-        self.cfg["env"]["numStates"] = 13 # Dof pos (7) + to_target (3pos+3ori)
+        self.cfg["env"]["numActions"] = 6 # our action is 3 pose (d_x, d_y, d_z) and 3 orientation error (d_roll, d_pitch, d_yaw) of end effector
+        
+        self.asset_root = self.cfg["env"]["asset"].get("assetRoot")
+        self.kinova_asset_file = self.cfg["env"]["asset"].get("assetFileNameKinova")
+
         self.cfg["device_type"] = device_type
         self.cfg["device_id"] = device_id
         self.cfg["headless"] = headless
     
-        self.asset_root = self.cfg["env"]["asset"].get("assetRoot")
-        self.kinova_asset_file = self.cfg["env"]["asset"].get("assetFileNameKinova")
-
+        self.up_axis = "z"
+        self.up_axis_idx = 2
+        self.dt = 1/60.
         
     def set_tensors(self):
-        """creates, intilized and slice some usefull tensors
+        """creates, intilize and slice some usefull tensors
         """
+        ######################################### Tensors created based on gym tensors ######################################################
         # get gym GPU dof tensors and create some wrapper and slices
         # Retrieves Degree-of-Freedom state buffer. Buffer has shape (num_environments* num_dofs , 2). Each DOF state contains position and velocity.
+        # Note: random objects do not have dofs, its  (num_envs*kinova_dof=7,2)
         dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
-        self.dof_state = gymtorch.wrap_tensor(dof_state_tensor) # contains the kinova+table+box dofs
-
+        self.dof_state = gymtorch.wrap_tensor(dof_state_tensor) # contains the kinova dofs 
         self.kinova_dof_state = self.dof_state.view(self.num_envs, -1, 2)[: , :self.num_kinova_dofs] # just get the kinova dofs
         self.kinova_dof_pos = self.kinova_dof_state[..., 0]
         self.kinova_dof_vel = self.kinova_dof_state[..., 1]
-        self.rand_obj_dof_state = self.dof_state.view(self.num_envs, -1, 2)[:, self.num_kinova_dofs:]
 
         
         # get gym GPU rigid body state tensors and create some wrappers
@@ -106,7 +136,6 @@ class KinovaCameraIKEnv(BaseTask):
         self.rigid_body_states = gymtorch.wrap_tensor(rigid_body_tensor).view(self.num_envs, -1, 13) # we need it to get the end efffector pose & orientation
         self.end_effector_pos = self.rigid_body_states[:, self.endefector_handle][:, 0:3]
         self.end_effector_rot = self.rigid_body_states[:, self.endefector_handle][:, 3:7]
-        #self.num_bodies = self.rigid_body_states.shape[1]
         
         # necessary for reseting random objects
         # Retrieves buffer for Actor root states. Buffer has shape (num_environments, num_actors * 13). State for each actor root contains position([0:3]), rotation([3:7]), linear velocity([7:10]), and angular velocity([10:13]).
@@ -120,8 +149,6 @@ class KinovaCameraIKEnv(BaseTask):
         self.jacobian = gymtorch.wrap_tensor(self._jacobian)
         # jacobian entries corresponding to end effector
         self.j_eef = self.jacobian[:, self.endeffector_index - 1, :]
-        print("Jacobian shape: " ,self.jacobian.shape)
-        print("Jacobian end effector entry shape: ", self.j_eef.shape)
 
         # refresh all the tensors
         self.gym.refresh_dof_state_tensor(self.sim)
@@ -129,21 +156,22 @@ class KinovaCameraIKEnv(BaseTask):
         self.gym.refresh_jacobian_tensors(self.sim)
         self.gym.refresh_actor_root_state_tensor(self.sim)
 
-        #self.num_dofs = self.gym.get_sim_dof_count(self.sim) // self.num_envs
-        self.kinova_home = to_torch([0.0, -1.0, 0.0, +2.6, -1.57, 0.0, 0.0], device=self.device) # pos of each joint
-        self.home_joints = torch.zeros((self.num_envs, self.num_kinova_dofs), dtype=torch.float, device=self.device) # joints pose at home
-        self.target_joints = torch.zeros((self.num_envs, self.num_kinova_dofs), dtype=torch.float, device=self.device) # joints pose at target
+        ######################################### Util Tensors ######################################################
+
+        self.kinova_home = to_torch([0.0, -1.0, 0.0, +2.6, -1.57, 0.0, 0.0], device=self.device) # each joint pose
+        self.current_joints = torch.zeros((self.num_envs, self.num_kinova_dofs), dtype=torch.float, device=self.device) # joints pose at current state. this tensor is usefuel for calculating reward without images
+        self.target_joints = torch.zeros((self.num_envs, self.num_kinova_dofs), dtype=torch.float, device=self.device) # joints pose at target state. this tensor is usefuel for calculating reward without images
         # whenever you wana move kinova to a target you have to fill in this tensor and call set_dof_position_target
         self.kinova_target_dof_pos = torch.zeros((self.num_envs, self.num_kinova_dofs), dtype=torch.float, device=self.device)
         
-        # 3 if manip is moved to a random conf, the goal image is taken, and the returned to home pose and home image is taken
-        # 2 if moved to goal but not homed
+        # 3 if rnd object is respawned and manip is moved to a random conf, the goal image is taken, and then returned to home pose and home image is taken (reset complete)
+        # 2 if rnd object is respawned and moved to goal but not homed
         # 1 if rnd object is respawned
         # 0 if neither moved to goal nor homed nor rnd object is respawned
         self.reset_complete = torch.zeros(self.num_envs, dtype=torch.int32, device=self.device) 
         self.goal_obs = torch.zeros((self.num_envs,1, self.camera_width, self.camera_height,4 ), device=self.device, dtype=torch.float)
         self.current_obs = torch.zeros((self.num_envs, 1, self.camera_width, self.camera_height,4 ), device=self.device, dtype=torch.float)
-        self.valid = torch.zeros(self.num_envs, dtype=torch.int32, device=self.device) # if 1 the outputs of step() are valid if zero are not valid
+        self.valid = torch.zeros(self.num_envs, dtype=torch.int32, device=self.device) # if 1 the outputs of step() are valid if zero are not valid. will be 1 whenever reset is complete
 
     def create_sim(self):
         self.sim_params.up_axis = gymapi.UP_AXIS_Z
@@ -156,14 +184,15 @@ class KinovaCameraIKEnv(BaseTask):
         self._create_envs( self.cfg["env"]['envSpacing'], int(np.sqrt(self.num_envs)))
 
     def _create_ground_plane(self):
-        """creates the ground plane of simulator
-        """
         plane_params = gymapi.PlaneParams()
         plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0)
         self.gym.add_ground(self.sim, plane_params)
 
     def load_rand_assets(self):
-        """loads some random assets that will be used as targets
+        """loads random assets to spawn as random objects 
+
+        Returns:
+            list: including loaded random assets
         """
         rand_assets = []
         for asset_desc in asset_descriptors:
@@ -179,10 +208,6 @@ class KinovaCameraIKEnv(BaseTask):
     def load_kinova_asset(self):
         """loads kinova assets and obtains some info based on asset
 
-        Args:
-            asset_root ([type]): [description]
-            kinova_asset_file ([type]): [description]
-
         Returns:
             [type]: [description]
         """
@@ -197,20 +222,20 @@ class KinovaCameraIKEnv(BaseTask):
         asset_options.use_mesh_materials = True
         kinova_asset = self.gym.load_asset(self.sim, self.asset_root, self.kinova_asset_file, asset_options)
 
-        #todo how should I choose damping and stifness?
+        #todo how should I choose damping and stifness? No idea TBH
         kinova_dof_stiffness = to_torch([400, 400, 400, 400, 400, 400, 400], dtype=torch.float, device=self.device)
         kinova_dof_damping = to_torch([80, 80, 80, 80, 80, 80, 80], dtype=torch.float, device=self.device)
 
         self.num_kinova_bodies = self.gym.get_asset_rigid_body_count(kinova_asset)
         self.num_kinova_dofs = self.gym.get_asset_dof_count(kinova_asset)
-
+        print("Loading Kinova ...")
         print("num kinova bodies: ", self.num_kinova_bodies)
         print("num kinova dofs: ", self.num_kinova_dofs)
 
-        # set kinova dof properties
-        kinova_dof_props = self.gym.get_asset_dof_properties(kinova_asset)
         self.kinova_dof_lower_limits = []
         self.kinova_dof_upper_limits = []
+        # set kinova dof properties
+        kinova_dof_props = self.gym.get_asset_dof_properties(kinova_asset)
         for i in range(self.num_kinova_dofs):
             kinova_dof_props['driveMode'][i] = gymapi.DOF_MODE_POS
             if self.physics_engine == gymapi.SIM_PHYSX:
@@ -227,7 +252,6 @@ class KinovaCameraIKEnv(BaseTask):
         self.kinova_dof_lower_limits = tensor_clamp(self.kinova_dof_lower_limits, -3.14* torch.ones_like(self.kinova_dof_lower_limits), +3.14* torch.ones_like(self.kinova_dof_lower_limits))
         self.kinova_dof_upper_limits = to_torch(self.kinova_dof_upper_limits, device=self.device)
         self.kinova_dof_upper_limits = tensor_clamp(self.kinova_dof_upper_limits, -3.14*torch.ones_like(self.kinova_dof_upper_limits), +3.14*torch.ones_like(self.kinova_dof_upper_limits))
-        self.kinova_dof_speed_scales = torch.ones_like(self.kinova_dof_lower_limits)
 
          # get link index of endeffector hand, which we will use as end effector
         kinova_link_dict = self.gym.get_asset_rigid_body_dict(kinova_asset)
@@ -235,16 +259,10 @@ class KinovaCameraIKEnv(BaseTask):
         return kinova_asset, kinova_dof_props
 
     def _create_envs(self, spacing, num_per_row):
-        """creates environments
-
-        Args:
-            spacing ([type]): [description]
-            num_per_row ([type]): [description]
-        """
         lower = gymapi.Vec3(-spacing, -spacing, 0.0)
         upper = gymapi.Vec3(spacing, spacing, spacing)
 
-        self.rand_assets = self.load_rand_assets()
+        rand_assets = self.load_rand_assets()
         kinova_asset, kinova_dof_props = self.load_kinova_asset()
         
         kinova_start_pose = gymapi.Transform()
@@ -262,10 +280,9 @@ class KinovaCameraIKEnv(BaseTask):
         self.kinova_indices = []
         self.obj_indices = []
         for i in range(self.num_envs):
+            print("creating env %d ...", i+1)
             # create env instance
-            env_ptr = self.gym.create_env(
-                self.sim, lower, upper, num_per_row
-            )
+            env_ptr = self.gym.create_env(self.sim, lower, upper, num_per_row)
 
             kinova_actor = self.gym.create_actor(env_ptr, kinova_asset, kinova_start_pose, "kinova", i, 2)
             self.gym.set_actor_dof_properties(env_ptr, kinova_actor, kinova_dof_props)
@@ -281,21 +298,17 @@ class KinovaCameraIKEnv(BaseTask):
             
             # obtain sensor tensor
             sensor_tensor = self.gym.get_camera_image_gpu_tensor(self.sim, env_ptr, sensor_handle, gymapi.IMAGE_COLOR)
-            print("Got sensor tensor with shape", sensor_tensor.shape)
-            # wrap sensor tensor in a pytorch tensor
             torch_sensor_tensor = gymtorch.wrap_tensor(sensor_tensor)
             self.cam_tensors.append(torch_sensor_tensor.unsqueeze(0))
-            print("  Torch sensor tensor device:", torch_sensor_tensor.device)
-            print("  Torch sensor tensor shape:", torch_sensor_tensor.shape)
 
-            # # add actor
+            # add actor
             pose = gymapi.Transform()
             pose.p = gymapi.Vec3(np.random.rand()-2, np.random.rand()-0.5, 0.5)
             u = np.random.rand()
             v = np.random.rand()
             w = np.random.rand()
             pose.r = gymapi.Quat(math.sqrt(1-u)*math.sin(2*math.pi*v), math.sqrt(1-u)*math.cos(2*math.pi*v), math.sqrt(u)*math.sin(2*math.pi*w), math.sqrt(u)*math.cos(2*math.pi*w))
-            object_actor = self.gym.create_actor(env_ptr, self.rand_assets[np.random.randint(len(self.rand_assets))], pose, "random_asset"+str(i), i,2)
+            object_actor = self.gym.create_actor(env_ptr, rand_assets[np.random.randint(len(rand_assets))], pose, "random_asset"+str(i), i,2)
             obj_index = self.gym.get_actor_index(env_ptr, object_actor, gymapi.DOMAIN_SIM)
             self.obj_indices.append(obj_index)
 
@@ -303,7 +316,7 @@ class KinovaCameraIKEnv(BaseTask):
 
         self.kinova_indices = to_torch(self.kinova_indices, dtype=torch.long, device=self.device)
         self.obj_indices = to_torch(self.obj_indices, dtype=torch.long, device=self.device)
-        self.endefector_handle = self.gym.find_actor_rigid_body_handle(env_ptr, kinova_actor,  "EndEffector_Link") 
+        self.endefector_handle = self.gym.find_actor_rigid_body_handle(env_ptr, kinova_actor,  "EndEffector_Link")
 
     def compute_reward(self):
     
@@ -313,7 +326,9 @@ class KinovaCameraIKEnv(BaseTask):
             similarities.append(similarity)
 
         similarities_tensor = to_torch(similarities, device=self.device, dtype=torch.float)
-        self.rew_buf = torch.where(similarities_tensor>=self.similarity_thr, torch.ones_like(self.rew_buf), torch.zeros_like(self.rew_buf) )
+        self.rew_buf = torch.zeros_like(self.rew_buf)
+        temp_rew_buf = torch.where(similarities_tensor>=self.similarity_thr, torch.ones_like(self.rew_buf), torch.zeros_like(self.rew_buf) )
+        self.rew_buf[(self.valid==1).nonzero(as_tuple=False).squeeze(-1)] = temp_rew_buf[(self.valid==1).nonzero(as_tuple=False).squeeze(-1)] # if not valid similarity would be 1 cause both images are zero, and this may change the reset bufer
         self.reset_buf = torch.where(self.progress_buf >= self.max_episode_length - 1, torch.ones_like(self.reset_buf), self.reset_buf)
         
 
@@ -339,20 +354,22 @@ class KinovaCameraIKEnv(BaseTask):
             self.current_obs[i] = self.cam_tensors[i]
         
         torch.cat((self.goal_obs, self.current_obs), 1 , out=self.obs_buf)
-        if  frame_no%100 <=5 :
-            for i in range(1):
-                i=0
-                fname = os.path.join(self.img_dir, "goal-%04d-%04d.png" % (frame_no, i))
-                sensor_img = torch.squeeze(self.obs_buf[i][0]).cpu().numpy()
-                imageio.imwrite(fname, sensor_img)
-                
-                fname = os.path.join(self.img_dir, "current-%04d-%04d.png" % (frame_no, i))
-                sensor_img = torch.squeeze(self.obs_buf[i][1]).cpu().numpy()
-                imageio.imwrite(fname, sensor_img)
+        if self.debug_viz:
+            if  frame_no%100 <=5 :
+                for i in range(1):
+                    i=0
+                    fname = os.path.join(self.img_dir, "goal-%04d-%04d.png" % (frame_no, i))
+                    sensor_img = torch.squeeze(self.obs_buf[i][0]).cpu().numpy()
+                    imageio.imwrite(fname, sensor_img)
+                    
+                    fname = os.path.join(self.img_dir, "current-%04d-%04d.png" % (frame_no, i))
+                    sensor_img = torch.squeeze(self.obs_buf[i][1]).cpu().numpy()
+                    imageio.imwrite(fname, sensor_img)
+        # todo following print lines are for debug
         print("pose: ", self.end_effector_pos)
         print("ori: ", self.end_effector_rot)
         self.gym.end_access_image_tensors(self.sim)
-        return self.obs_buf, self.states_buf #todo state buf is not changed
+        return self.obs_buf
 
     def reach_home(self, env_ids):
         """sets the kinova target to home
@@ -370,7 +387,6 @@ class KinovaCameraIKEnv(BaseTask):
             self.kinova_dof_pos[env_ids, :] = pos
             self.kinova_dof_vel[env_ids, :] = torch.zeros_like(self.kinova_dof_vel[env_ids])
             self.kinova_target_dof_pos[env_ids, :self.num_kinova_dofs] = pos
-            self.home_joints[env_ids, :] = pos
 
             # todo why set both pose and state (state itself has pos and vel)?
             # When simulate is called, the actor joints will move based on their joint constraints and the effort DOF parameter to the target positions.
@@ -398,7 +414,7 @@ class KinovaCameraIKEnv(BaseTask):
            
             # set target for Kinova
             pos = tensor_clamp(
-                self.kinova_home.unsqueeze(0) + 0.50 * (torch.rand((len(env_ids), self.num_kinova_dofs), device=self.device) - 0.25),
+                self.kinova_home.unsqueeze(0) + self.target_space*2.0 * (torch.rand((len(env_ids), self.num_kinova_dofs), device=self.device) - self.target_space),
                 self.kinova_dof_lower_limits, self.kinova_dof_upper_limits)
             self.kinova_dof_pos[env_ids, :] = pos
             self.kinova_dof_vel[env_ids, :] = torch.zeros_like(self.kinova_dof_vel[env_ids])
@@ -416,10 +432,9 @@ class KinovaCameraIKEnv(BaseTask):
                                                 gymtorch.unwrap_tensor(kinova_indices), len(kinova_indices))
 
     def respawn_rand_obj(self, env_ids):
-        rand_obj_indices = self.kinova_indices[env_ids].to(torch.int32) + 1 # assuming each env has 1 kinova and 1 rand object
+        rand_obj_indices = self.obj_indices[env_ids].to(torch.int32)
         if(len(rand_obj_indices)>0):
          # re-spawn random objects
-            self.rand_obj_dof_state[env_ids, :] = torch.zeros_like(self.rand_obj_dof_state[env_ids])
             rand_poses = []
             for _ in range(self.num_envs):
                 pose = gymapi.Transform()
@@ -434,6 +449,10 @@ class KinovaCameraIKEnv(BaseTask):
             self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                          gymtorch.unwrap_tensor(self.root_state_tensor),
                                                          gymtorch.unwrap_tensor(rand_obj_indices), len(rand_obj_indices))
+
+    def is_done(self):
+        self.reset_buf = torch.where(self.progress_buf >= self.max_episode_length - 1, torch.ones_like(self.reset_buf), self.reset_buf)
+        self.reset_buf = torch.where(self.rew_buf == 1, torch.ones_like(self.reset_buf), self.reset_buf)
 
     def reset(self, env_ids):
         """
@@ -453,7 +472,6 @@ class KinovaCameraIKEnv(BaseTask):
         self.progress_buf[env_ids] = 0
         self.reset_buf[env_ids] = 0
         self.obs_buf[env_ids] = torch.zeros(*self.num_obs, device=self.device, dtype=torch.float32)
-        self.states_buf[env_ids] = torch.zeros(( self.num_states), device=self.device, dtype=torch.float32)
 
     def pre_physics_step(self, desired):
         """
@@ -491,7 +509,6 @@ class KinovaCameraIKEnv(BaseTask):
     def post_physics_step(self):
         
         self.progress_buf += 1
-        self.reset_buf[(self.progress_buf==self.max_episode_length-1).nonzero(as_tuple=False).squeeze(-1)]=1
         env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
 
         if len(env_ids) > 0 or len((self.reset_complete!=3).nonzero(as_tuple=False).squeeze(-1)) > 0: # some already running scenarios need reset OR we already in the reset scenario
@@ -502,36 +519,10 @@ class KinovaCameraIKEnv(BaseTask):
         self.valid[(self.reset_complete!=3).nonzero(as_tuple=False).squeeze(-1)]=0
         self.compute_observations()
         self.compute_reward()
+        self.is_done() # todo need to change place 
+        #self.valid[self.reset_buf.nonzero(as_tuple=False).squeeze(-1)] = 0 # reset_buf may change in is_done() so we have to prevent taking actions in pre physics? let action be done, we will call reset after taking that action
 
         self.reset_complete[(self.reset_complete==2).nonzero(as_tuple=False).squeeze(-1)] = 3
         self.reset_complete[(self.reset_complete==1).nonzero(as_tuple=False).squeeze(-1)] = 2
-        self.reset_complete[(self.reset_complete==0).nonzero(as_tuple=False).squeeze(-1)] = 1 
-
-
-
-@torch.jit.script
-def compute_kinova_reward(
-    reset_buf, progress_buf, actions,
-    end_effector_pos, end_effector_rot, goal,
-    num_envs, dist_reward_scale, rot_reward_scale,
-            action_penalty_scale, max_episode_length
-):
-    # type: (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int, float, float, float, float) -> Tuple[Tensor, Tensor]
-
-    # distance from hand to the drawer
-    d = torch.norm(end_effector_pos - goal[:,:3], p=2, dim=-1)
-    dist_reward = 1.0 / (1.0 + d ** 2)
-    dist_reward *= dist_reward
-    dist_reward = torch.where(d <= 0.02, dist_reward * 2, dist_reward)
-    
-    rot_reward = torch.sum(end_effector_rot* goal[:,3:], dim=-1) 
-    actions = actions.squeeze(-1)
-    # regularization on the actions (summed for each environment)
-    action_penalty = torch.sum(actions ** 2, dim=-1)
-    rewards = dist_reward_scale * dist_reward + rot_reward_scale * rot_reward - action_penalty_scale * action_penalty
-    # to do is being reset just after max ep len? what about done?
-    reset_buf = torch.where(progress_buf >= max_episode_length - 1, torch.ones_like(reset_buf), reset_buf)
-    return rewards, reset_buf
-
-
+        self.reset_complete[(self.reset_complete==0).nonzero(as_tuple=False).squeeze(-1)] = 1
 
