@@ -76,16 +76,17 @@ AssetDesc("urdf/objects/cube_multicolor.urdf","cube", False)
 
 class KinovaCameraIKEnv(BaseTask):
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless, enable_camera_sensors=True):
-        # todo it is temporary
-        # create directory for saved images
-        self.img_dir = "kinova_camera_images"
-        if not os.path.exists(self.img_dir):
-            os.mkdir(self.img_dir)
 
         self.parse_config(cfg, sim_params, physics_engine, device_type, device_id, headless)
 
         # the base class will call a few functin before returning the program here
         super().__init__(cfg=self.cfg, enable_camera_sensors=enable_camera_sensors)
+
+        if self.debug_viz:
+            # create directory for saved images
+            self.img_dir = "kinova_camera_images"
+            if not os.path.exists(self.img_dir):
+                os.mkdir(self.img_dir)
 
         self.set_tensors()
         self.respawn_rand_obj(torch.arange(self.num_envs, device=self.device))
@@ -99,6 +100,7 @@ class KinovaCameraIKEnv(BaseTask):
         self.max_episode_length = self.cfg["env"]["episodeLength"]
         self.similarity_thr = self.cfg["env"]["similarityThreshold"]
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
+        self.home_pose_noise = self.cfg["env"]["startPositionNoise"]
         self.target_space = self.cfg["env"]["targetSpace"] # if 0.25 means the target joints will be at: home joints (rad) + 0.25*2*rand()-0.25 (rad). it will be set to a low value at the beginning and gradually goes high for the sake of curriculum learning
         self.camera_width = self.cfg["env"]["camera"]["width"]
         self.camera_height = self.cfg["env"]["camera"]["height"]
@@ -319,56 +321,59 @@ class KinovaCameraIKEnv(BaseTask):
         self.endefector_handle = self.gym.find_actor_rigid_body_handle(env_ptr, kinova_actor,  "EndEffector_Link")
 
     def compute_reward(self):
+        """Computes the reward for all the environments by calculating the structural similarity between current and target images
+           Note: if an environment is not valid yet, no matter of structural similarity the reward would be zero, otherwise it might happen both image are none and their similarity be 1 so reward will be one so the episode will be done!
+        """
     
         similarities = []
         for i in range(self.num_envs):
-            similarity = metrics.structural_similarity(self.obs_buf[i][1].cpu().numpy(), self.obs_buf[i][0].cpu().numpy(), multichannel=True)
+            similarity = metrics.structural_similarity(self.obs_buf[i][0].detach().cpu().numpy(), self.obs_buf[i][1].detach().cpu().numpy(), multichannel=True)
             similarities.append(similarity)
 
         similarities_tensor = to_torch(similarities, device=self.device, dtype=torch.float)
         self.rew_buf = torch.zeros_like(self.rew_buf)
         temp_rew_buf = torch.where(similarities_tensor>=self.similarity_thr, torch.ones_like(self.rew_buf), torch.zeros_like(self.rew_buf) )
-        self.rew_buf[(self.valid==1).nonzero(as_tuple=False).squeeze(-1)] = temp_rew_buf[(self.valid==1).nonzero(as_tuple=False).squeeze(-1)] # if not valid similarity would be 1 cause both images are zero, and this may change the reset bufer
-        self.reset_buf = torch.where(self.progress_buf >= self.max_episode_length - 1, torch.ones_like(self.reset_buf), self.reset_buf)
-        
+        self.rew_buf[(self.valid==1).nonzero(as_tuple=False).squeeze(-1)] = temp_rew_buf[(self.valid==1).nonzero(as_tuple=False).squeeze(-1)]
 
     def compute_observations(self):
         """sets the obs_buff based on goal and current observations
 
         Returns:
-            [tensor, tensor]: [observation buffer]
+            [torch.tensor]: [observation buffer including goal and current images]
         """
         # render sensors and refresh camera tensors
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
-        frame_no = self.gym.get_frame_count(self.sim)
         self.gym.render_all_camera_sensors(self.sim)
         self.gym.start_access_image_tensors(self.sim)
+        frame_no = self.gym.get_frame_count(self.sim)
 
-        reset_complete_2 = (self.reset_complete==2).nonzero(as_tuple=False).squeeze(-1) # already reached target
+        reset_complete_2 = (self.reset_complete==2).nonzero(as_tuple=False).squeeze(-1) # the random object re-spawned and manip already reached target
         reset_complete_3 = (self.reset_complete==3).nonzero(as_tuple=False).squeeze(-1)
         for i in reset_complete_2:
-            self.goal_obs[i] = self.cam_tensors[i] # self.reset_complete==1 means already is reached to target but not hommed yet
+            self.goal_obs[i] = self.cam_tensors[i] # self.reset_complete==2 means already is reached to target but not hommed yet
         for i in reset_complete_3:
             self.current_obs[i] = self.cam_tensors[i]
         
-        torch.cat((self.goal_obs, self.current_obs), 1 , out=self.obs_buf)
-        if self.debug_viz:
-            if  frame_no%100 <=5 :
-                for i in range(1):
-                    i=0
-                    fname = os.path.join(self.img_dir, "goal-%04d-%04d.png" % (frame_no, i))
-                    sensor_img = torch.squeeze(self.obs_buf[i][0]).cpu().numpy()
-                    imageio.imwrite(fname, sensor_img)
-                    
-                    fname = os.path.join(self.img_dir, "current-%04d-%04d.png" % (frame_no, i))
-                    sensor_img = torch.squeeze(self.obs_buf[i][1]).cpu().numpy()
-                    imageio.imwrite(fname, sensor_img)
-        # todo following print lines are for debug
-        print("pose: ", self.end_effector_pos)
-        print("ori: ", self.end_effector_rot)
+        torch.cat(( self.current_obs, self.goal_obs), 1 , out=self.obs_buf)
         self.gym.end_access_image_tensors(self.sim)
+
+        if self.debug_viz:
+            for i in range(1):
+                i=0
+                if self.progress_buf[i]<=4:
+                    fname = os.path.join(self.img_dir, "goal-frame%04d-prog%04d-env%04d.png" % (frame_no, self.progress_buf[i] ,i))
+                    goal_img = torch.squeeze(self.obs_buf[i][1]).detach().cpu().numpy()
+                    imageio.imwrite(fname, goal_img)
+                    
+                    fname = os.path.join(self.img_dir, "current--frame%04d-prog%04d-env%04d.png" % (frame_no,self.progress_buf[i], i))
+                    current_img = torch.squeeze(self.obs_buf[i][0]).detach().cpu().numpy()
+                    imageio.imwrite(fname, current_img)
+    
+            print("pose: ", self.end_effector_pos)
+            print("ori: ", self.end_effector_rot)
+            
         return self.obs_buf
 
     def reach_home(self, env_ids):
@@ -376,14 +381,14 @@ class KinovaCameraIKEnv(BaseTask):
         Note: it wont reach home until simulate step being called at base class 
 
         Args:
-            env_ids ([list]): [index of envs that their kinova need to be homed]
+            env_ids (list): index of envs that their kinova need to be homed
         """
-        kinova_indices = self.kinova_indices[env_ids].to(torch.int32)
-        if(len(kinova_indices)>0):
-            # pos = tensor_clamp(
-            #     self.kinova_home.unsqueeze(0) + 0.25 * (torch.rand((len(env_ids), self.num_kinova_dofs), device=self.device) - 0.5),
-            #     self.kinova_dof_lower_limits, self.kinova_dof_upper_limits)
-            pos = self.kinova_home.unsqueeze(0)
+        
+        if(len(env_ids)>0):
+            kinova_indices = self.kinova_indices[env_ids].to(torch.int32)
+            pos = tensor_clamp(
+                self.kinova_home.unsqueeze(0) + self.home_pose_noise*2.0 * (torch.rand((len(env_ids), self.num_kinova_dofs), device=self.device) - self.home_pose_noise),
+                self.kinova_dof_lower_limits, self.kinova_dof_upper_limits)
             self.kinova_dof_pos[env_ids, :] = pos
             self.kinova_dof_vel[env_ids, :] = torch.zeros_like(self.kinova_dof_vel[env_ids])
             self.kinova_target_dof_pos[env_ids, :self.num_kinova_dofs] = pos
@@ -404,15 +409,13 @@ class KinovaCameraIKEnv(BaseTask):
     def reach_target(self, env_ids):
         """generated some random dof (as a goal) for kinovas[env_ids] and sets the target to reach there 
             Note: it wont reach target until simulate step being called at base class 
-            Note: if I just call set_dof_position_target_tensor_indexed if will reach target after a few steps but when calling set_dof_state_tensor_indexed together with that it reaches there immedietly
+            Note: if I just call set_dof_position_target_tensor_indexed it will reach target after a few steps but when calling set_dof_state_tensor_indexed together with that it reaches there immedietly
         Args:
-            env_ids ([list]): [index of envs that their kinova need to be homed]
+            env_ids (list): index of envs that their kinova need to reach a random target
         """
-        kinova_indices = self.kinova_indices[env_ids].to(torch.int32)
 
-        if(len(kinova_indices)>0):            
-           
-            # set target for Kinova
+        if(len(env_ids)>0):            
+            kinova_indices = self.kinova_indices[env_ids].to(torch.int32)
             pos = tensor_clamp(
                 self.kinova_home.unsqueeze(0) + self.target_space*2.0 * (torch.rand((len(env_ids), self.num_kinova_dofs), device=self.device) - self.target_space),
                 self.kinova_dof_lower_limits, self.kinova_dof_upper_limits)
@@ -432,11 +435,15 @@ class KinovaCameraIKEnv(BaseTask):
                                                 gymtorch.unwrap_tensor(kinova_indices), len(kinova_indices))
 
     def respawn_rand_obj(self, env_ids):
-        rand_obj_indices = self.obj_indices[env_ids].to(torch.int32)
-        if(len(rand_obj_indices)>0):
-         # re-spawn random objects
+        """in the current version of Isaac Gym we cannot delete an actor, so we just transform the random object to a new pos and orientation
+
+        Args:
+            env_ids (list): index of envs that their kinova need to reach a random target
+        """
+        if(len(env_ids)>0):
+            rand_obj_indices = self.obj_indices[env_ids].to(torch.int32)
             rand_poses = []
-            for _ in range(self.num_envs):
+            for _ in env_ids:
                 pose = gymapi.Transform()
                 pose.p = gymapi.Vec3(np.random.rand()-2, np.random.rand()-0.5, 0.5)
                 u = np.random.rand()
@@ -444,7 +451,7 @@ class KinovaCameraIKEnv(BaseTask):
                 w = np.random.rand()
                 pose.r = gymapi.Quat(math.sqrt(1-u)*math.sin(2*math.pi*v), math.sqrt(1-u)*math.cos(2*math.pi*v), math.sqrt(u)*math.sin(2*math.pi*w), math.sqrt(u)*math.cos(2*math.pi*w))
                 rand_poses.append([pose.p.x, pose.p.y, pose.p.z, pose.r.x, pose.r.y, pose.r.z, pose.r.w, 0.0, 0.0, 0.0 ,0.0 , 0.0 , 0.0 ])
-            rand_poses_tensor= to_torch(rand_poses, device=self.device, dtype=torch.float).view(self.num_envs, 1, 13) # assuming just one random obj in each
+            rand_poses_tensor= to_torch(rand_poses, device=self.device, dtype=torch.float).view(len(env_ids), 1, 13) # assuming just one random obj in each
             self.rand_obj_states[env_ids] = rand_poses_tensor[:]
             self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                          gymtorch.unwrap_tensor(self.root_state_tensor),
@@ -458,29 +465,32 @@ class KinovaCameraIKEnv(BaseTask):
         """
             reset kinova:
             1- this is the most complex function
-            2- when a gym scenario resets we have to set a new goal and set the kinova to be at home
+            2- when a gym scenario resets we have to re-spawn the random object, set a new goal and set the kinova to be at home
             3- to set the goal the kinova and the object has to MOVE to a random conf and kinova has to capture a rgb as goal and then get back to the home and take another rgb as current obs
-            4- step 3 will happen in TWO CALLS TO THE STEP() AT BASE CLASS       
+            4- step 3 will happen in THREE CALLS TO THE STEP() AT BASE CLASS, so within those three consequtive calls the data are not valid       
 
         Args:
-            env_ids ([list]): [index of envs that their kinova need to be reset]
+            env_ids (list): index of envs need to be reset
         """
         self.respawn_rand_obj((self.reset_complete==0).nonzero(as_tuple=False).squeeze(-1))
         self.reach_target((self.reset_complete==1).nonzero(as_tuple=False).squeeze(-1))
         self.reach_home((self.reset_complete==2).nonzero(as_tuple=False).squeeze(-1))
-       
-        self.progress_buf[env_ids] = 0
-        self.reset_buf[env_ids] = 0
-        self.obs_buf[env_ids] = torch.zeros(*self.num_obs, device=self.device, dtype=torch.float32)
+        
+        reset_ids = (self.reset_complete!=3).nonzero(as_tuple=False).squeeze(-1)
+        self.progress_buf[reset_ids] = 0
+        self.reset_buf[reset_ids] = 0
+        self.goal_obs[reset_ids] = torch.zeros((self.num_envs,1, self.camera_width, self.camera_height,4 ), device=self.device, dtype=torch.float)[reset_ids,...]
+        self.current_obs[reset_ids] = torch.zeros((self.num_envs,1, self.camera_width, self.camera_height,4 ), device=self.device, dtype=torch.float)[reset_ids,...]
 
     def pre_physics_step(self, desired):
         """
-        takes the actions as input (actions are end effector pose not in join state) so an IK will be solved here and then set the target based on IK results
+        takes the actions as input (actions are end effector delta(x,y,z, roll, pith, yaw)) so an IK will be solved here and then set the target based on IK results
+        Note: if an env is not valid yet, it is most likely in reach_target or reach_home phase, so we should not interupt with new actions here, i.e. action will just be execute for those that are valid (are not in reset scenario)
 
         Args:
-            actions ([tensor]): [actions to be done]
+            actions (torch.tensor): actions to be exectudet
         """
-        kinova_indices = self.kinova_indices[(self.valid==1).nonzero(as_tuple=False).squeeze(-1)].to(torch.int32) # action will just be execute for those that are valid (are not in reset scenario)
+        kinova_indices = self.kinova_indices[(self.valid==1).nonzero(as_tuple=False).squeeze(-1)].to(torch.int32) 
         if(len(kinova_indices)>0):
             pos_err = desired[:, :3] - self.end_effector_pos
             orn_err = orientation_error( desired[:, 3:] , self.end_effector_rot)
@@ -510,17 +520,16 @@ class KinovaCameraIKEnv(BaseTask):
         
         self.progress_buf += 1
         env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
+        self.reset_complete[env_ids] = 0
 
         if len(env_ids) > 0 or len((self.reset_complete!=3).nonzero(as_tuple=False).squeeze(-1)) > 0: # some already running scenarios need reset OR we already in the reset scenario
-            self.reset_complete[env_ids] = 0 # 0 means neither moved to goal nor homed
             self.reset(env_ids)
 
         self.valid[(self.reset_complete==3).nonzero(as_tuple=False).squeeze(-1)]=1
         self.valid[(self.reset_complete!=3).nonzero(as_tuple=False).squeeze(-1)]=0
         self.compute_observations()
         self.compute_reward()
-        self.is_done() # todo need to change place 
-        #self.valid[self.reset_buf.nonzero(as_tuple=False).squeeze(-1)] = 0 # reset_buf may change in is_done() so we have to prevent taking actions in pre physics? let action be done, we will call reset after taking that action
+        self.is_done()
 
         self.reset_complete[(self.reset_complete==2).nonzero(as_tuple=False).squeeze(-1)] = 3
         self.reset_complete[(self.reset_complete==1).nonzero(as_tuple=False).squeeze(-1)] = 2
