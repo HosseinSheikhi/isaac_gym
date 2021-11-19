@@ -66,13 +66,13 @@ if not args.headless:
         raise ValueError('*** Failed to create viewer')
 
 # set up the env grid
-num_envs = 1
+num_envs = 4
 spacing = 0.75
 env_lower = gymapi.Vec3(-spacing, 0.0, -spacing)
 env_upper = gymapi.Vec3(spacing, spacing, spacing)
 
 # create ant asset
-asset_root = "../../assets"
+asset_root =  "/home/mh/isaacgym/assets"
 asset_file =  "urdf/kinova_gen3/urdf/GEN3_URDF_V12.urdf"
 print("Loading asset '%s' from '%s'" % (asset_file, asset_root))
 ant_asset = gym.load_asset(sim, asset_root, asset_file)
@@ -84,11 +84,11 @@ actor_handles = []
 camera_handles = []
 
 # Load textures from file
-texture_files = os.listdir("../../assets/textures/")
+texture_files = os.listdir("/home/mh/isaacgym/assets/textures/")
 loaded_texture_handle_list = []
 for file in texture_files:
     if file.endswith(".jpg"):
-        loaded_texture_handle_list.append(gym.create_texture_from_file(sim, os.path.join("../../assets/textures/", file)))
+        loaded_texture_handle_list.append(gym.create_texture_from_file(sim, os.path.join("/home/mh/isaacgym/assets/textures/", file)))
 
 # Sensor camera properties
 cam_pos = gymapi.Vec3(0.0, 3.0, 3.0)

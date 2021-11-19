@@ -4,7 +4,8 @@ env:
   envSpacing: 3
   episodeLength: 100
   enableDebugVis: True
-
+  rndLightStep: 100 # change the sim light parameters every rndLightStep, set to -1 to disable
+  textureRnd: True # if true random objects texture will change after each scenario
   startPositionNoise: 0.25 # the robot will be homed to home_dof +- startPositionNoise(rad)
 
   similarityThreshold: 0.8

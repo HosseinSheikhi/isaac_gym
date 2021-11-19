@@ -49,10 +49,18 @@ def orientation_error(desired, current):
     Returns:
         torch.Tensor: [error between two quats]
     """
+    # desired[0][0]=0.282
+    # desired[0][1]=-0.165
+    # desired[0][2]=-0.37
+    # desired[0][3]=0.866
+    # current[0][0]=0.163
+    # current[0][1]=-0.059
+    # current[0][2]=0.336
+    # current[0][3]=0.925
     cc = quat_conjugate(current)
     q_r = quat_mul(desired, cc)
-    print("q_r:", q_r)
-    return q_r[:, 0:3] * torch.sign(q_r[:, 3]).unsqueeze(-1)
+    res = q_r[:, 0:3] * torch.sign(q_r[:, 3]).unsqueeze(-1)
+    return res
 
 class AssetDesc:
     def __init__(self, file_name, asset_name, flip_visual_attachments=False, mesh_normal_mode=gymapi.FROM_ASSET):
@@ -71,7 +79,10 @@ class AssetDesc:
 
 # create descriptors for assets as random objects
 asset_descriptors = [
-AssetDesc("urdf/objects/cube_multicolor.urdf","cube", False)
+AssetDesc("urdf/objects/cube_multicolor.urdf","color_cube", False),
+AssetDesc("urdf/modern_chair/chair.urdf","chair", False),
+AssetDesc("urdf/ball.urdf","ball", False),
+AssetDesc("urdf/number1/model.urdf","number", False)
 ]
 
 class KinovaCameraIKEnv(BaseTask):
@@ -89,6 +100,7 @@ class KinovaCameraIKEnv(BaseTask):
                 os.mkdir(self.img_dir)
 
         self.set_tensors()
+        self.load_textures()
         self.respawn_rand_obj(torch.arange(self.num_envs, device=self.device))
         self.reach_target(torch.arange(self.num_envs, device=self.device))        
     
@@ -101,6 +113,8 @@ class KinovaCameraIKEnv(BaseTask):
         self.similarity_thr = self.cfg["env"]["similarityThreshold"]
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
         self.home_pose_noise = self.cfg["env"]["startPositionNoise"]
+        self.rnd_light_step = self.cfg["env"]["rndLightStep"]
+        self.rnd_texture = self.cfg["env"]["textureRnd"]
         self.target_space = self.cfg["env"]["targetSpace"] # if 0.25 means the target joints will be at: home joints (rad) + 0.25*2*rand()-0.25 (rad). it will be set to a low value at the beginning and gradually goes high for the sake of curriculum learning
         self.camera_width = self.cfg["env"]["camera"]["width"]
         self.camera_height = self.cfg["env"]["camera"]["height"]
@@ -189,6 +203,15 @@ class KinovaCameraIKEnv(BaseTask):
         plane_params = gymapi.PlaneParams()
         plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0)
         self.gym.add_ground(self.sim, plane_params)
+
+    def load_textures(self):
+        """load textures for domain randomization
+        """
+        texture_files = os.listdir("/home/mh/isaacgym/assets/textures/")
+        self.loaded_texture_handle_list = []
+        for file in texture_files:
+            if file.endswith(".jpg"):
+                self.loaded_texture_handle_list.append(self.gym.create_texture_from_file(self.sim, os.path.join("/home/mh/isaacgym/assets/textures/", file)))
 
     def load_rand_assets(self):
         """loads random assets to spawn as random objects 
@@ -281,6 +304,7 @@ class KinovaCameraIKEnv(BaseTask):
         self.envs = []
         self.kinova_indices = []
         self.obj_indices = []
+        self.obj_handels = []
         for i in range(self.num_envs):
             print("creating env %d ...", i+1)
             # create env instance
@@ -310,8 +334,10 @@ class KinovaCameraIKEnv(BaseTask):
             v = np.random.rand()
             w = np.random.rand()
             pose.r = gymapi.Quat(math.sqrt(1-u)*math.sin(2*math.pi*v), math.sqrt(1-u)*math.cos(2*math.pi*v), math.sqrt(u)*math.sin(2*math.pi*w), math.sqrt(u)*math.cos(2*math.pi*w))
-            object_actor = self.gym.create_actor(env_ptr, rand_assets[np.random.randint(len(rand_assets))], pose, "random_asset"+str(i), i,2)
+            rnd_asset_num = np.random.randint(len(rand_assets))
+            object_actor = self.gym.create_actor(env_ptr, rand_assets[rnd_asset_num] , pose, "random_asset"+str(i)+asset_descriptors[rnd_asset_num].asset_name, i,2)
             obj_index = self.gym.get_actor_index(env_ptr, object_actor, gymapi.DOMAIN_SIM)
+            self.obj_handels.append(object_actor)
             self.obj_indices.append(obj_index)
 
             self.envs.append(env_ptr)
@@ -358,6 +384,13 @@ class KinovaCameraIKEnv(BaseTask):
         
         torch.cat(( self.current_obs, self.goal_obs), 1 , out=self.obs_buf)
         self.gym.end_access_image_tensors(self.sim)
+
+        if frame_no%self.rnd_light_step==1:
+            # randomize light parameters
+            l_color = gymapi.Vec3(np.random.uniform(1, 1), np.random.uniform(1, 1), np.random.uniform(1, 1))
+            l_ambient = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
+            l_direction = gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1))
+            self.gym.set_light_parameters(self.sim, 0, l_color, l_ambient, l_direction)
 
         if self.debug_viz:
             for i in range(1):
@@ -441,9 +474,17 @@ class KinovaCameraIKEnv(BaseTask):
             env_ids (list): index of envs that their kinova need to reach a random target
         """
         if(len(env_ids)>0):
+            
             rand_obj_indices = self.obj_indices[env_ids].to(torch.int32)
             rand_poses = []
-            for _ in env_ids:
+            for indx in env_ids:
+                if self.rnd_texture and "color_cube" not in self.gym.get_actor_name(self.envs[indx], self.obj_handels[-1]):
+                    num_bodies = self.gym.get_actor_rigid_body_count(self.envs[indx], self.obj_handels[-1])
+                    for n in range(num_bodies):
+                        # self.gym.set_rigid_body_color(self.envs[indx], self.obj_handels[-1], n, gymapi.MESH_VISUAL,
+                        #                         gymapi.Vec3(np.random.uniform(0, 1), np.random.uniform(0, 1), np.random.uniform(0, 1)))
+                        self.gym.set_rigid_body_texture(self.envs[indx], self.obj_handels[-1], n, gymapi.MESH_VISUAL,
+                                                self.loaded_texture_handle_list[np.random.randint(0, len(self.loaded_texture_handle_list)-1)])
                 pose = gymapi.Transform()
                 pose.p = gymapi.Vec3(np.random.rand()-2, np.random.rand()-0.5, 0.5)
                 u = np.random.rand()
